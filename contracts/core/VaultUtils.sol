@@ -297,7 +297,7 @@ contract VaultUtils is IVaultUtils, Ownable {
             if (tLimit.maxShortSize > 0) require(_latestShort < tLimit.maxShortSize, "max token short size reached");
             if (tLimit.maxTradingSize > 0) require(_sumSize < tLimit.maxTradingSize, "max trading size reached");
             if (tLimit.countMinSize > 0 && tLimit.maxRatio > 0 && _sumSize > 0){
-                require( (_latestLong > _latestShort ? _latestLong : _latestShort).div(_sumSize) < tLimit.maxTradingSize, "max long/short ratio reached");
+                require( (_latestLong > _latestShort ? _latestLong : _latestShort).mul(VaultMSData.COM_RATE_PRECISION).div(_sumSize) < tLimit.maxRatio, "max long/short ratio reached");
             }
         }
 
