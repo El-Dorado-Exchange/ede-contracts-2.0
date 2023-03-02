@@ -320,14 +320,14 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             position.entryFundingRateSec.mul(3600).div(1000000), position.reserveAmount, position.realisedPnl, price );
     }
 
-    function decreasePosition(address _account, address _collateralToken, address _indexToken, uint256 _collateralDelta, uint256 _sizeDelta, bool _isLong, address /*_receiver*/
+    function decreasePosition(address _account, address _collateralToken, address _indexToken, uint256 _collateralDelta, uint256 _sizeDelta, bool _isLong, address _receiver
         ) external override nonReentrant returns (uint256) {
         _validate(approvedRouters[msg.sender] || _account == msg.sender, 41);
         bytes32 key = vaultUtils.getPositionKey(_account, _collateralToken, _indexToken, _isLong, 0);
-        return _decreasePosition(key, _collateralDelta, _sizeDelta);
+        return _decreasePosition(key, _collateralDelta, _sizeDelta, _receiver);
     }
 
-    function _decreasePosition(bytes32 key, uint256 _collateralDelta, uint256 _sizeDelta) private returns (uint256) {
+    function _decreasePosition(bytes32 key, uint256 _collateralDelta, uint256 _sizeDelta, address _receiver) private returns (uint256) {
         // bytes32 key = vaultUtils.getPositionKey(_account, _collateralToken, _indexToken, _isLong, 0);
         VaultMSData.Position storage position = positions[key];
         vaultUtils.validateDecreasePosition(position,_sizeDelta, _collateralDelta);
@@ -382,7 +382,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             uint256 tkOutAfterFee = 0;
             tkOutAfterFee = usdToTokenMin(position.collateralToken, usdOutAfterFee);
             emit DecreasePositionTransOut(key, tkOutAfterFee);
-            _transferOut(position.collateralToken, tkOutAfterFee, position.account);
+            _transferOut(position.collateralToken, tkOutAfterFee, _receiver);
             usdOutAfterFee = tkOutAfterFee;
         }
         if (_del) _delPosition(position.account, key);
@@ -404,7 +404,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         _validate(liquidationState != 0, 36);
         if (liquidationState > 1) {
             // max leverage exceeded or max takingProfitLine reached
-            _decreasePosition(key, 0, position.size);
+            _decreasePosition(key, 0, position.size, position.account);
             return;
         }
 
