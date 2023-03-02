@@ -8,6 +8,7 @@ import "./interfaces/IPositionRouter.sol";
 
 import "./BasePositionManager.sol";
 
+
 contract PositionRouter is BasePositionManager, IPositionRouter {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
@@ -162,6 +163,9 @@ contract PositionRouter is BasePositionManager, IPositionRouter {
     event SetIsLeverageEnabled(bool isLeverageEnabled);
     event SetDelayValues(uint256 minBlockDelayKeeper, uint256 minTimeDelayPublic, uint256 maxTimeDelay);
     event SetRequestKeysStartValues(uint256 increasePositionRequestKeysStart, uint256 decreasePositionRequestKeysStart);
+    
+    event ExecuteDecreaseError(bytes32 key, string errMsg);
+    event ExecuteIncreaseError(bytes32 key, string errMsg);
 
     modifier onlyPositionKeeper() {
         require(isPositionKeeper[msg.sender], "PositionRouter: forbidden");
@@ -228,8 +232,6 @@ contract PositionRouter is BasePositionManager, IPositionRouter {
 
         while (index < _endIndex) {
             bytes32 key = increasePositionRequestKeys[index];
-
-
             // if the request was executed then delete the key from the array
             // if the request was not executed then break from the loop, this can happen if the
             // minimum number of blocks has not yet passed
@@ -238,13 +240,21 @@ contract PositionRouter is BasePositionManager, IPositionRouter {
             // in case an error was thrown, cancel the request
             try this.executeIncreasePosition(key, _executionFeeReceiver) returns (bool _wasExecuted) {
                 if (!_wasExecuted) { break; }
-            } catch {
+            } catch Error(string memory _errMsg){
+                emit ExecuteIncreaseError(key, _errMsg);
                 // wrap this call in a try catch to prevent invalid cancels from blocking the loop
-                
+                try this.cancelIncreasePosition(key, _executionFeeReceiver) returns (bool _wasCancelled) {
+                    if (!_wasCancelled) { break; }
+                } catch {}
+            } catch {
+                emit ExecuteIncreaseError(key, "no str Reason");
+                // wrap this call in a try catch to prevent invalid cancels from blocking the loop
                 try this.cancelIncreasePosition(key, _executionFeeReceiver) returns (bool _wasCancelled) {
                     if (!_wasCancelled) { break; }
                 } catch {}
             }
+
+
 
             delete increasePositionRequestKeys[index];
             index++;
@@ -274,6 +284,26 @@ contract PositionRouter is BasePositionManager, IPositionRouter {
         increasePositionRequestKeysStart = index;
     }
 
+    function executeDecreasePositionsRaise(uint256 _endIndex, address payable _executionFeeReceiver) external onlyPositionKeeper {
+        uint256 index = decreasePositionRequestKeysStart;
+        uint256 length = decreasePositionRequestKeys.length;
+
+        if (index >= length) { return; }
+
+        if (_endIndex > length) {
+            _endIndex = length;
+        }
+
+        while (index < _endIndex) {
+            bytes32 key = decreasePositionRequestKeys[index];
+            executeDecreasePosition(key, _executionFeeReceiver);
+            delete decreasePositionRequestKeys[index];
+            index++;
+        }
+        decreasePositionRequestKeysStart = index;
+    }
+
+
     function executeDecreasePositions(uint256 _endIndex, address payable _executionFeeReceiver) external override onlyPositionKeeper {
         uint256 index = decreasePositionRequestKeysStart;
         uint256 length = decreasePositionRequestKeys.length;
@@ -295,14 +325,19 @@ contract PositionRouter is BasePositionManager, IPositionRouter {
             // in case an error was thrown, cancel the request
             try this.executeDecreasePosition(key, _executionFeeReceiver) returns (bool _wasExecuted) {
                 if (!_wasExecuted) { break; }
+            } catch Error(string memory _errMsg){
+                emit ExecuteDecreaseError(key, _errMsg);
+                // wrap this call in a try catch to prevent invalid cancels from blocking the loop
+                try this.cancelDecreasePosition(key, _executionFeeReceiver) returns (bool _wasCancelled) {
+                    if (!_wasCancelled) { break; }
+                } catch {}
             } catch {
+                emit ExecuteDecreaseError(key, "no str Reason");
                 // wrap this call in a try catch to prevent invalid cancels from blocking the loop
                 try this.cancelDecreasePosition(key, _executionFeeReceiver) returns (bool _wasCancelled) {
                     if (!_wasCancelled) { break; }
                 } catch {}
             }
-
-
 
             delete decreasePositionRequestKeys[index];
             index++;
