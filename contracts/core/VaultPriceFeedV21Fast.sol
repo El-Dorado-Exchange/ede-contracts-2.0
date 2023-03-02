@@ -14,7 +14,7 @@ interface IVaultPriceFeedV3 {
     function adjustmentBasisPoints(address _token) external view returns (uint256);
     function isAdjustmentAdditive(address _token) external view returns (bool);
     function setAdjustment(address _token, bool _isAdditive, uint256 _adjustmentBps) external;
-    // function setSpreadBasisPoints(address _token, uint256 _spreadBasisPoints) external;
+    function setSpreadBasisPoints(address _token, uint256 _spreadBasisPoints) external;
     // function setSpreadThresholdBasisPoints(uint256 _spreadThresholdBasisPoints) external;
     // function setPriceSampleSpace(uint256 _priceSampleSpace) external;
     // function setMaxStrictPriceDeviation(uint256 _maxStrictPriceDeviation) external;
@@ -63,7 +63,7 @@ contract VaultPriceFeedV21Fast is IVaultPriceFeedV3, Ownable {
     uint256 public constant BASIS_POINTS_DIVISOR = 10000;
     uint256 public constant MAX_ADJUSTMENT_INTERVAL = 2 hours;
     uint256 public constant MAX_ADJUSTMENT_BASIS_POINTS = 20;
-    // uint256 public constant MAX_SPREAD_BASIS_POINTS = 50;
+    uint256 public constant MAX_SPREAD_BASIS_POINTS = 50;
     // uint256 public priceInterval = 20;  //seconds.
     // uint256 public priceAdjPerInterval = 1;
     // uint256 public priceSampleSpace = 1;
@@ -130,10 +130,10 @@ contract VaultPriceFeedV21Fast is IVaultPriceFeedV3, Ownable {
     // function setSpreadThresholdBasisPoints(uint256 _spreadThresholdBasisPoints) external override onlyOwner {
     //     spreadThresholdBasisPoints = _spreadThresholdBasisPoints;
     // }
-    // function setSpreadBasisPoints(address _token, uint256 _spreadBasisPoints) external override onlyOwner {
-    //     require(_spreadBasisPoints <= MAX_SPREAD_BASIS_POINTS, "VaultPriceFeed: invalid _spreadBasisPoints");
-    //     spreadBasisPoints[_token] = _spreadBasisPoints;
-    // }
+    function setSpreadBasisPoints(address _token, uint256 _spreadBasisPoints) external override onlyOwner {
+        require(_spreadBasisPoints <= MAX_SPREAD_BASIS_POINTS, "VaultPriceFeed: invalid _spreadBasisPoints");
+        spreadBasisPoints[_token] = _spreadBasisPoints;
+    }
     // function setPriceSampleSpace(uint256 _priceSampleSpace) external override onlyOwner {
     //     require(_priceSampleSpace > 0, "VaultPriceFeed: invalid _priceSampleSpace");
     //     priceSampleSpace = _priceSampleSpace;
@@ -156,50 +156,48 @@ contract VaultPriceFeedV21Fast is IVaultPriceFeedV3, Ownable {
         (uint256 priceCl, bool stateCl, uint256 clUpdatedTime) = getChainlinkPrice(_token, _maximise);
         require(stateCl, "Chainlink Price Failure");
 
-        uint256 price_minBound = priceCl.mul(PRICE_VARIANCE_PRECISION - priceVariance).div(PRICE_VARIANCE_PRECISION);
-        uint256 price_maxBound = priceCl.mul(PRICE_VARIANCE_PRECISION + priceVariance).div(PRICE_VARIANCE_PRECISION);
+        {
+            uint256 price_minBound = priceCl.mul(PRICE_VARIANCE_PRECISION - priceVariance).div(PRICE_VARIANCE_PRECISION);
+            uint256 price_maxBound = priceCl.mul(PRICE_VARIANCE_PRECISION + priceVariance).div(PRICE_VARIANCE_PRECISION);
 
-        if ((pricePr < price_maxBound) && (pricePr > price_minBound)) {
-            if (priceMethod == 1){
-                if (_maximise){
-                    price = pricePr > priceCl ? pricePr : priceCl;
+            if ((pricePr < price_maxBound) && (pricePr > price_minBound)) {
+                if (priceMethod == 1){
+                    if (_maximise){
+                        price = pricePr > priceCl ? pricePr : priceCl;
+                    }
+                    else{
+                        price = pricePr > priceCl ? priceCl : pricePr;
+                    }
+                }
+                else if (priceMethod == 3){
+                    if (latestPriceFeedTime[_token] > clUpdatedTime){
+                        price = pricePr;
+                        updateTime = latestPriceFeedTime[_token];
+                    }
+                    else{
+                        price = priceCl;
+                        updateTime = clUpdatedTime;
+                    }                    
                 }
                 else{
-                    price = pricePr > priceCl ? priceCl : pricePr;
-                }
-            }
-            else if (priceMethod == 3){
-                if (latestPriceFeedTime[_token] > clUpdatedTime){
                     price = pricePr;
-                    updateTime = latestPriceFeedTime[_token];
-                }
-                else{
-                    price = priceCl;
                     updateTime = clUpdatedTime;
-                }                    
+                }
             }
-            else{
-                price = pricePr;
+            else {
+                price = priceCl;
                 updateTime = clUpdatedTime;
             }
         }
-        else {
-            price = priceCl;
-            updateTime = clUpdatedTime;
+        
+        if (spreadBasisPoints[_token] > 0){
+            if (_maximise){
+                price = price.mul(BASIS_POINTS_DIVISOR.add(spreadBasisPoints[_token])).div(BASIS_POINTS_DIVISOR);
+            }
+            else{
+                price = price.mul(BASIS_POINTS_DIVISOR.sub(spreadBasisPoints[_token])).div(BASIS_POINTS_DIVISOR);
+            }         
         }
-    
-        // if (updateTime > 0 && priceAdjPerInterval > 0 && priceInterval > 0){
-        //     // require(block.timestamp >= updateTime, "invalid price update time");
-        //     uint256 timeErr = block.timestamp > updateTime ? block.timestamp.sub(updateTime) : updateTime.sub(block.timestamp);
-        //     uint256 priceE = timeErr.div(priceInterval).mul(priceAdjPerInterval);
-        //     priceE = priceE > MAX_SPREAD_BASIS_POINTS ? MAX_SPREAD_BASIS_POINTS : priceE;
-        //     if (_maximise){
-        //         price = price.mul(BASIS_POINTS_DIVISOR.add(priceE)).div(BASIS_POINTS_DIVISOR);
-        //     }
-        //     else{
-        //         price = price.mul(BASIS_POINTS_DIVISOR.sub(priceE)).div(BASIS_POINTS_DIVISOR);
-        //     }         
-        // }
         return price;    
     }
 
@@ -226,22 +224,22 @@ contract VaultPriceFeedV21Fast is IVaultPriceFeedV3, Ownable {
     function getChainlinkPrice(address _token, bool _max) public view returns (uint256, bool, uint256) {
         if (chainlinkAddress[_token] == address(0)) {
             revert("chainlink address not set");
-            return (0, false, 0);
+            // return (0, false, 0);
         }
         if (chainlinkPrecision[_token] < 2) {
             revert("chainlink precision too small");
-            return (0, false, 0);
+            // return (0, false, 0);
         }
         (/*uint80 roundId*/, int256 answer, /*uint256 startedAt*/, uint256 updatedAt, /*uint80 answeredInRound*/) = AggregatorV3Interface(chainlinkAddress[_token]).latestRoundData();
     
         if (answer < 1) {
             revert("chainlink price equal to zero");
-            return (0, false, 0);
+            // return (0, false, 0);
         }
         uint256 time_interval = uint256(block.timestamp).sub(updatedAt);
         if (time_interval > priceSafetyGap && !strictStableTokens[_token]) {
             revert("chainlink safety time gap reached");
-            return (0, false,0);
+            // return (0, false,0);
         }
         uint256 price = uint256(answer).mul(PRICE_PRECISION).div(chainlinkPrecision[_token]);
         return (price, true, updatedAt);
@@ -333,7 +331,7 @@ contract VaultPriceFeedV21Fast is IVaultPriceFeedV3, Ownable {
         _batchRoundId.increment();
         fastTimeStamp = _timestamp;
 
-        uint8 bitsMaxLength = 8;
+        uint256 bitsMaxLength = 8;
         for (uint256 i = 0; i < _priceBits.length; i++) {
             uint256 priceBits = _priceBits[i];
 
