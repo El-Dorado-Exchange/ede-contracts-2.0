@@ -331,6 +331,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         // bytes32 key = vaultUtils.getPositionKey(_account, _collateralToken, _indexToken, _isLong, 0);
         VaultMSData.Position storage position = positions[key];
         vaultUtils.validateDecreasePosition(position,_sizeDelta, _collateralDelta);
+        _updateGlobalSize(position.isLong, position.indexToken, position.size, position.averagePrice, false);
         uint256 collateral = position.collateral;
         // scrop variables to avoid stack too deep errors
         {
@@ -342,23 +343,21 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         }
         updateRate(position.collateralToken);
         if (position.indexToken!= position.collateralToken) updateRate(position.indexToken); 
+        
+        uint256 price = position.isLong ? getMinPrice(position.indexToken) : getMaxPrice(position.indexToken);
 
         // _collectMarginFees runs inside _reduceCollateral
-        (uint256 usdOut, uint256 usdOutAfterFee) = _reduceCollateral(key, _collateralDelta, _sizeDelta);
+        (uint256 usdOut, uint256 usdOutAfterFee) = _reduceCollateral(key, _collateralDelta, _sizeDelta, price);
         
-        // update global trading size and average prie
-        _updateGlobalSize(position.isLong, position.indexToken, _sizeDelta, position.averagePrice, false);
-       
+    
         // update position entry rate
         position.lastUpdateTime = block.timestamp;  //attention: MUST run after _collectMarginFees (_reduceCollateral)
         position.entryFundingRateSec = tradingFee[position.collateralToken].accumulativefundingRateSec;
         position.entryPremiumRateSec = position.isLong ? tradingFee[position.indexToken].accumulativeLongRateSec : tradingFee[position.indexToken].accumulativeShortRateSec;
-
         bool _del = false;
         // scrop variables to avoid stack too deep errors
         {
             //do not add spread price impact in decrease position
-            uint256 price = position.isLong ? getMinPrice(position.indexToken) : getMaxPrice(position.indexToken);
             emit DecreasePosition( key, position, _collateralDelta, _sizeDelta, price, int256(usdOut) - int256(usdOutAfterFee), usdOut, position.collateral, collateral);
             if (position.size != _sizeDelta) {
                 // position.entryFundingRateSec = tradingFee[_collateralToken].accumulativefundingRateSec;
@@ -372,8 +371,9 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
                     position.size, position.collateral,position.averagePrice, position.entryFundingRateSec.mul(3600).div(1000000), position.reserveAmount, position.realisedPnl);
                 _del = true;
             }
-            
         }
+        // update global trading size and average prie
+        _updateGlobalSize(position.isLong, position.indexToken, position.size, position.averagePrice, true);
 
         updateRate(position.collateralToken);
         if (position.indexToken!= position.collateralToken) updateRate(position.indexToken);
@@ -578,7 +578,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
     }
 
 
-    function _reduceCollateral(bytes32 _key, uint256 _collateralDelta, uint256 _sizeDelta) private returns (uint256, uint256) {
+    function _reduceCollateral(bytes32 _key, uint256 _collateralDelta, uint256 _sizeDelta, uint256 _price) private returns (uint256, uint256) {
         VaultMSData.Position storage position = positions[_key];
 
         int256 fee = _collectMarginFees(_key, _sizeDelta);//collateral size updated in _collectMarginFees
@@ -604,7 +604,6 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             emit PayTax(position.account, _key, profitUsdOut, usdTax);
             profitUsdOut = profitUsdOut.sub(usdTax); 
 
-            // if (!position.isLong) {
             uint256 tokenAmount = usdToTokenMin(position.collateralToken, profitUsdOut);
             _decreasePoolAmount(position.collateralToken, tokenAmount);
             // _decreaseGuaranteedUsd(position.collateralToken, profitUsdOut);
@@ -616,7 +615,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             _decreaseGuaranteedUsd(position.collateralToken, adjustedDelta);//decreaseGU = taking position profit by pool
             position.realisedPnl = position.realisedPnl - int256(adjustedDelta);
         }
-
+        position.averagePrice = _price;
 
         uint256 usdOutAfterFee = profitUsdOut;
         // reduce the position's collateral by _collateralDelta
@@ -636,21 +635,6 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             _decreaseGuaranteedUsd(position.collateralToken, position.collateral); 
             position.collateral = 0;
         }
-
-        //// following part is already calculated in _collectMarginFees
-        // if the usdOut is more than the fee then deduct the fee from the usdOut directly
-        // else deduct the fee from the position's collateral
-        // uint256 usdOutAfterFee = usdOut;
-        // if (fee >= 0){
-        //     if (usdOut > uint256(fee)) {
-        //         usdOutAfterFee = usdOut.sub(uint256(fee));
-        //     } else {
-        //         require(position.collateral >= uint256(fee), "collateral is not enough");
-        //         position.collateral = position.collateral.sub(uint256(fee));
-        //     }
-        // }else{
-        //     usdOutAfterFee = usdOut.add(uint256(-fee));
-        // }
 
         uint256 usdOut = fee > 0 ? usdOutAfterFee.add(uint256(fee)) :  usdOutAfterFee.sub(uint256(-fee));
         emit UpdatePnl(_key, hasProfit, adjustedDelta, position.size, position.collateral, usdOut, usdOutAfterFee);
