@@ -208,7 +208,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         _decreaseUsdxAmount(_token, usdxAmount);
         _decreasePoolAmount(_token, redemptionAmount);
         usdxSupply = usdxSupply > usdxAmount ? usdxSupply.sub(usdxAmount) : 0;
-        // usdxAmounts[msg.sender] = usdxAmounts[msg.sender] > _usdxAmount ? usdxAmounts[msg.sender].sub(_usdxAmount) : 0;
+        usdxAmounts[msg.sender] = usdxAmounts[msg.sender].sub(_usdxAmount);
         uint256 feeBasisPoints = vaultUtils.getSellUsdxFeeBasisPoints(_token, usdxAmount);
         uint256 amountOut = _collectSwapFees(_token, redemptionAmount, feeBasisPoints);
         _validate(amountOut > 0, 22);
