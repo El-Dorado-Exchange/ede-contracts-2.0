@@ -566,7 +566,7 @@ contract OrderBook is ReentrancyGuard, IOrderBook, Ownable {
         uint256 _executionFee,
         bool _shouldWrap
     ) external payable nonReentrant {
-        /*
+        
         // always need this call because of mandatory executionFee user has to transfer in ETH
         _transferInETH();
         require(_path.length == 1 || _path.length == 2, "invalid path");
@@ -606,7 +606,7 @@ contract OrderBook is ReentrancyGuard, IOrderBook, Ownable {
             _triggerAboveThreshold,
             _executionFee
         );
-        */
+        
     }
 
     function _createIncreaseOrder(

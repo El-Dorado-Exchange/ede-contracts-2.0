@@ -94,7 +94,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         address _priceFeed,
         uint8 _baseMode
     ) external onlyOwner{
-        require(baseMode==0, "I1");
+        require(baseMode==0, "i0");
         usdx = _usdx;
         priceFeed = _priceFeed;
         require(_baseMode > 0 && _baseMode < 3, "I1");
@@ -709,7 +709,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         uint256 _discFee = eSBT.updateFee(_account, _marginFees);
         feeReservesDiscountedUSD = feeReservesDiscountedUSD.add(_discFee);
         uint256 _tIndex = block.timestamp.div(24 hours);
-        feeReservesRecord[_tIndex] = feeReservesRecord[_tIndex].add(_marginFees);
+        feeReservesRecord[_tIndex] = feeReservesRecord[_tIndex].add(_marginFees.sub(_discFee));
         emit CollectMarginFees(_collateralToken, _marginFees, _feeTokens);
     }
 

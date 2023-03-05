@@ -23,7 +23,6 @@ contract VaultUtils is IVaultUtils, Ownable {
     using EnumerableValues for EnumerableSet.Bytes32Set;
     bool public override inPrivateLiquidationMode = false;
     bool public override onlyRouterSwap = true;
-    bool public useNegativeRate = false;
 
     mapping(address => bool) public override isLiquidator;
     bool public override hasDynamicFees = true; //not used
@@ -296,8 +295,8 @@ contract VaultUtils is IVaultUtils, Ownable {
             if (tLimit.maxLongSize > 0) require(_latestLong < tLimit.maxLongSize, "max token long size reached");
             if (tLimit.maxShortSize > 0) require(_latestShort < tLimit.maxShortSize, "max token short size reached");
             if (tLimit.maxTradingSize > 0) require(_sumSize < tLimit.maxTradingSize, "max trading size reached");
-            if (tLimit.countMinSize > 0 && tLimit.maxRatio > 0 && _sumSize > tLimit.countMinSize){
-                require( (_latestLong > _latestShort ? _latestLong : _latestShort).mul(VaultMSData.COM_RATE_PRECISION).div(_sumSize) < tLimit.maxRatio, "max long/short ratio reached");
+            if (tLimit.countMinSize > 0 && tLimit.maxRatio > 0 && _sumSize > 0){
+                require( (_latestLong > _latestShort ? _latestLong : _latestShort).div(_sumSize) < tLimit.maxTradingSize, "max long/short ratio reached");
             }
         }
 
@@ -625,8 +624,6 @@ contract VaultUtils is IVaultUtils, Ownable {
         int256 _useFeePerSec  = _position.isLong ? _tradingFee.longRatePerSec : _tradingFee.shortRatePerSec;
         _accumPremiumRate += _useFeePerSec * int256((block.timestamp.sub(_tradingFee.latestUpdateTime)));
         _accumPremiumRate -= _position.entryPremiumRateSec;
-        if (!useNegativeRate && _accumPremiumRate < 0)
-            _accumPremiumRate = 0;
         return int256(_position.size) * _accumPremiumRate / int256(VaultMSData.PRC_RATE_PRECISION);
     }
 
