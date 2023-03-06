@@ -615,7 +615,6 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             _decreaseGuaranteedUsd(position.collateralToken, adjustedDelta);//decreaseGU = taking position profit by pool
             position.realisedPnl = position.realisedPnl - int256(adjustedDelta);
         }
-        position.averagePrice = _price;
 
         uint256 usdOutAfterFee = profitUsdOut;
         // reduce the position's collateral by _collateralDelta
