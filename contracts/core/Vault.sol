@@ -14,7 +14,6 @@ import "./interfaces/IVaultUtils.sol";
 import "./interfaces/IVaultPriceFeedV2.sol";
 import "./interfaces/IVaultStorage.sol";
 import "../DID/interfaces/IESBT.sol";
-import "hardhat/console.sol";
 
 contract Vault is ReentrancyGuard, IVault, Ownable {
     using SafeMath for uint256;
@@ -239,6 +238,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
 
     //---------------------------------------- TRADING FUNCTIONS --------------------------------------------------
     function swap(address _tokenIn,  address _tokenOut, address _receiver ) external override nonReentrant returns (uint256) {
+        _validate(approvedRouters[msg.sender], 41);
         _validate(isSwapEnabled, 23);
         return _swap(_tokenIn, _tokenOut, _receiver );
     }
@@ -264,7 +264,9 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         vaultUtils.validateIncreasePosition(_collateralToken, _indexToken, position.size, _sizeDelta ,_isLong);
 
         uint256 price = _isLong ? getMaxPrice(_indexToken) : getMinPrice(_indexToken);
-        price = vaultUtils.getImpactedPrice(_indexToken, _sizeDelta, price, _isLong);
+        price = vaultUtils.getImpactedPrice(_indexToken, 
+            _sizeDelta.add(_isLong ? tradingRec[_indexToken].longSize : tradingRec[_indexToken].shortSize), price, _isLong);
+            
         if (position.size == 0) {
             position.account = _account;
             position.averagePrice = price;
@@ -304,7 +306,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             if (position.reserveAmount > 0)
                 _decreaseReservedAmount(_collateralToken, position.reserveAmount);
             _increaseReservedAmount(_collateralToken, reserveDelta);
-            position.reserveAmount = reserveDelta;//position.reserveAmount.add(reserveDelta);
+            position.reserveAmount = reserveDelta;
         }
        
         _updateGlobalSize(_isLong, _indexToken, _sizeDelta, price, true);
@@ -331,7 +333,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         // bytes32 key = vaultUtils.getPositionKey(_account, _collateralToken, _indexToken, _isLong, 0);
         VaultMSData.Position storage position = positions[key];
         vaultUtils.validateDecreasePosition(position,_sizeDelta, _collateralDelta);
-        _updateGlobalSize(position.isLong, position.indexToken, position.size, position.averagePrice, false);
+        _updateGlobalSize(position.isLong, position.indexToken, _sizeDelta, position.averagePrice, false);
         uint256 collateral = position.collateral;
         // scrop variables to avoid stack too deep errors
         {
@@ -369,11 +371,12 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             } else {
                 emit ClosePosition(key, position.account,
                     position.size, position.collateral,position.averagePrice, position.entryFundingRateSec.mul(3600).div(1000000), position.reserveAmount, position.realisedPnl);
+                position.size = 0;
                 _del = true;
             }
         }
         // update global trading size and average prie
-        _updateGlobalSize(position.isLong, position.indexToken, position.size, position.averagePrice, true);
+        // _updateGlobalSize(position.isLong, position.indexToken, position.size, position.averagePrice, true);
 
         updateRate(position.collateralToken);
         if (position.indexToken!= position.collateralToken) updateRate(position.indexToken);
@@ -624,7 +627,7 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
             _validate(position.collateral >= _collateralDelta, 33);
             position.collateral = position.collateral.sub(_collateralDelta);
             _decreasePoolAmount(position.collateralToken, usdToTokenMin(position.collateralToken, _collateralDelta));
-            _decreaseGuaranteedUsd(position.collateralToken, profitUsdOut); 
+            _decreaseGuaranteedUsd(position.collateralToken, _collateralDelta); 
         }
 
         // if the position will be closed, then transfer the remaining collateral out
@@ -697,8 +700,6 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         _collectFeeResv(_position.account, _position.collateralToken, feeUsd, feeTokens);
 
         emit CollectMarginFees(_position.collateralToken, feeUsd, feeTokens);
-
-
         return _premiumFee + int256(feeUsd);
     }
 
@@ -711,8 +712,6 @@ contract Vault is ReentrancyGuard, IVault, Ownable {
         feeReservesRecord[_tIndex] = feeReservesRecord[_tIndex].add(_marginFees.sub(_discFee));
         emit CollectMarginFees(_collateralToken, _marginFees, _feeTokens);
     }
-
-
 
 
     function _transferIn(address _token) private returns (uint256) {
