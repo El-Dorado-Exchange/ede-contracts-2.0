@@ -49,7 +49,6 @@ contract VaultUtils is IVaultUtils, Ownable {
     mapping(address => VaultMSData.TradingLimit) tradingLimit;
   
     //trading tax part
-    uint256 public override taxGradient;
     uint256 public override taxDuration;
     uint256 public override taxMax;
     mapping(address => VaultMSData.TradingTax) tradingTax; 
@@ -165,11 +164,9 @@ contract VaultUtils is IVaultUtils, Ownable {
         if (_taxTime > 0){
             taxMax = _taxMax;
             taxDuration = _taxTime;
-            taxGradient = _taxMax.mul(VaultMSData.PRC_RATE_PRECISION).div(_taxTime);
         }else{
             taxMax = 0;
             taxDuration = 0;
-            taxGradient = 0;
         }
     }
 
@@ -295,8 +292,8 @@ contract VaultUtils is IVaultUtils, Ownable {
             if (tLimit.maxLongSize > 0) require(_latestLong < tLimit.maxLongSize, "max token long size reached");
             if (tLimit.maxShortSize > 0) require(_latestShort < tLimit.maxShortSize, "max token short size reached");
             if (tLimit.maxTradingSize > 0) require(_sumSize < tLimit.maxTradingSize, "max trading size reached");
-            if (tLimit.countMinSize > 0 && tLimit.maxRatio > 0 && _sumSize > 0){
-                require( (_latestLong > _latestShort ? _latestLong : _latestShort).div(_sumSize) < tLimit.maxTradingSize, "max long/short ratio reached");
+            if (tLimit.countMinSize > 0 && tLimit.maxRatio > 0 && _sumSize > tLimit.countMinSize){
+                require( (_latestLong > _latestShort ? _latestLong : _latestShort).mul(VaultMSData.COM_RATE_PRECISION).div(_sumSize) < tLimit.maxRatio, "max long/short ratio reached");
             }
         }
 
@@ -340,16 +337,15 @@ contract VaultUtils is IVaultUtils, Ownable {
     }
     
 
-    function getReserveDelta(address _collateralToken, uint256 _sizeUSD, uint256 /*_colUSD*/, uint256 _takeProfitRatio) public view override returns (uint256){
+    function getReserveDelta(address _collateralToken, uint256 _sizeUSD, uint256 _colUSD, uint256 _takeProfitRatio) public view override returns (uint256){
         // uint256 reserveDelta = usdToTokenMax(_collateralToken, _sizeDelta);
         // uint256 reserveDelta = 
         if (vault.baseMode() == 1){
             return vault.usdToTokenMax(_collateralToken, _sizeUSD);
         }
         else if (vault.baseMode() == 2){
-            // require(_position.maxProfitRatio <= )
-            require(maxProfitRatio > 0, "max profit not set");
-            uint256 resvUSD = _takeProfitRatio > 0 ? _takeProfitRatio : maxProfitRatio;
+            require(maxProfitRatio > 0 && _takeProfitRatio <= maxProfitRatio, "invalid max profit");
+            uint256 resvUSD = _colUSD.mul(_takeProfitRatio > 0 ? _takeProfitRatio : maxProfitRatio).div(VaultMSData.COM_RATE_PRECISION);         
             return vault.usdToTokenMax(_collateralToken, resvUSD);
         }
         else{
@@ -381,21 +377,23 @@ contract VaultUtils is IVaultUtils, Ownable {
         return (_uInfo, _iInfo);
     }
 
-    function getLiqPrice(bytes32 /*_key*/) public view override returns (int256){
-        // (uint256 size, uint256 collateral, uint256 averagePrice, uint256 entryFundingRate, , , , ) =vault.getPositionByKey(_key);
-        // if (size < 1) return size;
+    function getLiqPrice(bytes32 _key) public view override returns (int256){
+        VaultMSData.Position memory position = vault.getPositionStructByKey(_key);
+        if (position.size < 1) return 0;
+        
+        VaultMSData.TradingFee memory colTF = vault.getTradingFee(position.collateralToken);
+        VaultMSData.TradingFee memory idxTF = vault.getTradingFee(position.indexToken);
 
-        // uint256 _fees = getFundingFee(positionsOrig[_key].account,positionsOrig[_key].collateralToken, positionsOrig[_key].indexToken, positionsOrig[_key].isLong, size, entryFundingRate);
-        // _fees = _fees.add(getPositionFee(positionsOrig[_key].account, positionsOrig[_key].collateralToken, positionsOrig[_key].indexToken, positionsOrig[_key].isLong, size));
-        // _fees = _fees.add(liquidationFeeUsd);
+        uint256 marginFees = getFundingFee(position, colTF).add(getPositionFee(position, 0, idxTF));
+        int256 _premiumFee = getPremiumFee(position, idxTF);
+    
+        uint256 colRemain = position.collateral.sub(marginFees);
+        colRemain = _premiumFee >= 0 ?position.collateral.sub(uint256(_premiumFee)) : position.collateral.add(uint256(-_premiumFee)) ;
+        // (bool hasProfit, uint256 delta) = getDelta(position.indexToken, position.size, position.averagePrice, position.isLong, position.lastUpdateTime, position.collateral);
+        // colRemain = hasProfit ? position.collateral.sub(delta) : position.collateral.add(delta);
 
-        // uint256 _maxLevCon = size.mul(BASIS_POINTS_DIVISOR).div(maxLeverage);
-
-        // uint256 _tmpDelta = _maxLevCon > _fees ?_maxLevCon :  _fees;
-
-        // _tmpDelta = averagePrice.mul(collateral.sub(_tmpDelta)).div(size);
-        // return positionsOrig[_key].isLong ? averagePrice.sub(_tmpDelta) : averagePrice.add(_tmpDelta);
-        return 0;
+        uint256 acceptPriceGap = colRemain.mul(position.averagePrice).div(position.size);
+        return position.isLong ? int256(position.averagePrice) - int256(acceptPriceGap) : int256(position.averagePrice.add(acceptPriceGap));
     }
 
     function getPositionsInfo( uint256 _start, uint256 _end) public view returns ( bytes32[]memory, uint256[]memory,bool[] memory){
@@ -434,15 +432,6 @@ contract VaultUtils is IVaultUtils, Ownable {
     }
 
     function getPositionNextAveragePrice(uint256 _size, uint256 _averagePrice, uint256 _nextPrice, uint256 _sizeDelta, bool _isIncrease) public override pure returns (uint256) {
-        // (bool hasProfit, uint256 delta) = getDelta(_indexToken, _size, _averagePrice,_isLong, _lastIncreasedTime);
-        // uint256 nextSize = _size.add(_sizeDelta);
-        // uint256 divisor;
-        // if (_isLong) {
-        //     divisor = hasProfit ? nextSize.add(delta) : nextSize.sub(delta);
-        // } else {
-        //     divisor = hasProfit ? nextSize.sub(delta) : nextSize.add(delta);
-        // }
-        // return _nextPrice.mul(nextSize).div(divisor);
         if (_isIncrease)
             return (_size.mul(_averagePrice)).add(_sizeDelta.mul(_nextPrice)).div(_size.add(_sizeDelta));
         else{
@@ -455,11 +444,11 @@ contract VaultUtils is IVaultUtils, Ownable {
         if (taxMax == 0)
             return 0;
         uint256 _positionDuration = block.timestamp.sub(_aveIncreaseTime);
-        if (_positionDuration > taxDuration)
+        if (_positionDuration >= taxDuration)
             return 0;
-
-        uint256 taxPercent = taxDuration.sub(_positionDuration).mul(taxGradient).div(VaultMSData.PRC_RATE_PRECISION);
-        taxPercent = taxPercent > taxMax ? taxMax : taxPercent;
+        
+        uint256 taxPercent = (taxDuration.sub(_positionDuration)).mul(taxMax).div(taxDuration);
+        // taxPercent = taxPercent > taxMax ? taxMax : taxPercent;
         taxPercent = taxPercent > VaultMSData.PRC_RATE_PRECISION ? VaultMSData.PRC_RATE_PRECISION : taxPercent;
         return _profit.mul(taxPercent).div(VaultMSData.PRC_RATE_PRECISION);
     }
