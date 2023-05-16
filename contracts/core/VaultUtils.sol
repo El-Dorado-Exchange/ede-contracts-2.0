@@ -10,11 +10,7 @@ import "../utils/EnumerableValues.sol";
 import "./VaultMSData.sol";
 import "./interfaces/IVault.sol";
 import "./interfaces/IVaultUtils.sol";
-
-interface IVaultPriceFeedV3 {
-    function priceVariancePer1Million(address _token) external view returns (uint256); //100 for 1%
-}
-
+import "./interfaces/IVaultPriceFeedV3Fast.sol";
 
 
 contract VaultUtils is IVaultUtils, Ownable {
@@ -28,11 +24,11 @@ contract VaultUtils is IVaultUtils, Ownable {
     bool public override hasDynamicFees = true; //not used
 
     //Fees related to swap
-    uint256 public override taxBasisPoints = 50; // 0.5%
-    uint256 public override stableTaxBasisPoints = 20; // 0.2%
-    uint256 public override mintBurnFeeBasisPoints = 30; // 0.3%
-    uint256 public override swapFeeBasisPoints = 30; // 0.3%
-    uint256 public override stableSwapFeeBasisPoints = 4; // 0.04%
+    uint256 public override taxBasisPoints = 0; // 0.5%
+    uint256 public override stableTaxBasisPoints = 0; // 0.2%
+    uint256 public override mintBurnFeeBasisPoints = 0; // 0.3%
+    uint256 public override swapFeeBasisPoints = 0; // 0.3%
+    uint256 public override stableSwapFeeBasisPoints = 0; // 0.04%
     uint256 public override marginFeeBasisPoints = 10; // 0.1%
     uint256 public constant MAX_FEE_BASIS_POINTS = 500; // 5%   50000
     uint256 public constant MAX_LIQUIDATION_FEE_USD = 100 * VaultMSData.PRICE_PRECISION; // 100 USD
@@ -55,7 +51,7 @@ contract VaultUtils is IVaultUtils, Ownable {
 
 
     //trading profit limitation part
-    uint256 public override maxProfitRatio = 9 * VaultMSData.COM_RATE_PRECISION;
+    uint256 public override maxProfitRatio = 20 * VaultMSData.COM_RATE_PRECISION;
 
     IVault public vault;
     mapping(uint256 => string) public override errors;
@@ -65,13 +61,13 @@ contract VaultUtils is IVaultUtils, Ownable {
     mapping(address => uint256) public override minSpreadCalUSD;// = 10000 * PRICE_PRECISION;
 
     uint256 public override premiumBasisPointsPerHour;
-    uint256 public premiumBasisPointsPerSec;
-    uint256 public maxPremiumBasisErrorUSD;
+    uint256 public override premiumBasisPointsPerSec;
+    uint256 public override maxPremiumBasisErrorUSD;
 
     int256 public override posIndexMaxPointsPerHour;
-    int256 public posIndexMaxPointsPerSec;
+    int256 public override posIndexMaxPointsPerSec;
     int256 public override negIndexMaxPointsPerHour;
-    int256 public negIndexMaxPointsPerSec;
+    int256 public override negIndexMaxPointsPerSec;
 
     modifier onlyVault() {
         require(msg.sender == address(vault), "onlyVault");
@@ -103,12 +99,9 @@ contract VaultUtils is IVaultUtils, Ownable {
     function setTradingLimit(address _token, uint256 _maxShortSize, uint256 _maxLongSize, uint256 _maxSize, uint256 _maxRatio, uint256 _countMinSize) external onlyOwner{
         VaultMSData.TradingLimit storage tLim = tradingLimit[_token];
         // require(_maxRatio > VaultMSData.COM_RATE_PRECISION, "ratio small");
-        require(_maxShortSize > VaultMSData.PRICE_PRECISION, "short size small");
-        require(_maxLongSize > VaultMSData.PRICE_PRECISION, "long size small");
-        require(_countMinSize > VaultMSData.PRICE_PRECISION, "count min size small");
         tLim.maxTradingSize = _maxSize;
         tLim.maxShortSize = _maxShortSize;
-        tLim.maxLongSize = _maxShortSize;
+        tLim.maxLongSize = _maxLongSize;
         tLim.countMinSize = _countMinSize;
         tLim.maxRatio = _maxRatio;
     }
@@ -141,6 +134,58 @@ contract VaultUtils is IVaultUtils, Ownable {
         // vault.updateRate(address(0));
     }
 
+    // function copySetting(address _prevUtils) external onlyOwner {
+    //     IVaultUtils pVUtils = IVaultUtils(_prevUtils);
+
+    //     taxBasisPoints = pVUtils.taxBasisPoints(); // 100x
+    //     stableTaxBasisPoints = pVUtils.stableTaxBasisPoints(); // 100x
+    //     mintBurnFeeBasisPoints = pVUtils.mintBurnFeeBasisPoints(); // 100x
+    //     swapFeeBasisPoints = pVUtils.swapFeeBasisPoints(); // 100x
+    //     stableSwapFeeBasisPoints = pVUtils.stableSwapFeeBasisPoints(); // 100x
+    //     marginFeeBasisPoints = pVUtils.marginFeeBasisPoints(); // 100x
+    //     liquidationFeeUsd = pVUtils.liquidationFeeUsd(); // 100x
+    //     maxLeverage = pVUtils.maxLeverage(); // 100x
+    //     //Fees related to funding
+    //     fundingRateFactor = pVUtils.fundingRateFactor();
+    //     stableFundingRateFactor = pVUtils.stableFundingRateFactor();
+
+
+    //     address[] memory traTokenList = vault.tradingTokenList();
+    //     address[] memory funTokenList = vault.tradingTokenList();
+    //     for (uint i = 0; i < traTokenList.length; i++){
+    //         address _token = traTokenList[i];
+    //         maxGlobalShortSizes[_token] = pVUtils.maxGlobalShortSizes(_token);
+    //         maxGlobalLongSizes[_token] = pVUtils.maxGlobalLongSizes(_token);
+    //         spreadBasis[_token] = pVUtils.spreadBasis(_token);
+    //         maxSpreadBasis[_token] = pVUtils.maxSpreadBasis(_token);
+    //         minSpreadCalUSD[_token] = pVUtils.minSpreadCalUSD(_token);
+    //         tradingLimit[_token] = pVUtils.getTradingLimit(_token);
+    //         tradingTax[_token] = pVUtils.getTradingTax(_token);
+    //     }
+    //     for (uint i = 0; i < funTokenList.length; i++){
+    //         address _token = funTokenList[i];
+    //         maxGlobalShortSizes[_token] = pVUtils.maxGlobalShortSizes(_token);
+    //         maxGlobalLongSizes[_token] = pVUtils.maxGlobalLongSizes(_token);
+    //         spreadBasis[_token] = pVUtils.spreadBasis(_token);
+    //         maxSpreadBasis[_token] = pVUtils.maxSpreadBasis(_token);
+    //         minSpreadCalUSD[_token] = pVUtils.minSpreadCalUSD(_token);
+    //         tradingLimit[_token] = pVUtils.getTradingLimit(_token);
+    //         tradingTax[_token] = pVUtils.getTradingTax(_token);
+    //     }
+    //     //trading profit limitation part
+    //     maxProfitRatio = pVUtils.maxProfitRatio();
+    //     taxDuration = pVUtils.taxDuration();
+    //     taxMax = pVUtils.taxMax();
+
+    //     premiumBasisPointsPerHour = pVUtils.premiumBasisPointsPerHour();
+    //     premiumBasisPointsPerSec = pVUtils.premiumBasisPointsPerSec();
+    //     maxPremiumBasisErrorUSD = pVUtils.maxPremiumBasisErrorUSD();
+
+    //     posIndexMaxPointsPerHour = pVUtils.posIndexMaxPointsPerHour();
+    //     posIndexMaxPointsPerSec = pVUtils.posIndexMaxPointsPerSec();
+    //     negIndexMaxPointsPerHour = pVUtils.negIndexMaxPointsPerHour();
+    //     negIndexMaxPointsPerSec = pVUtils.negIndexMaxPointsPerSec();
+    // }
 
     function setFundingRate(
         uint256 _fundingRateFactor,
@@ -337,16 +382,16 @@ contract VaultUtils is IVaultUtils, Ownable {
     }
     
 
-    function getReserveDelta(address _collateralToken, uint256 _sizeUSD, uint256 _colUSD, uint256 _takeProfitRatio) public view override returns (uint256){
+    function getReserveDelta(address _collateralToken, uint256 _sizeUSD, uint256 /*_colUSD*/, uint256 /*_takeProfitRatio*/) public view override returns (uint256){
         // uint256 reserveDelta = usdToTokenMax(_collateralToken, _sizeDelta);
         // uint256 reserveDelta = 
         if (vault.baseMode() == 1){
             return vault.usdToTokenMax(_collateralToken, _sizeUSD);
         }
         else if (vault.baseMode() == 2){
-            require(maxProfitRatio > 0 && _takeProfitRatio <= maxProfitRatio, "invalid max profit");
-            uint256 resvUSD = _colUSD.mul(_takeProfitRatio > 0 ? _takeProfitRatio : maxProfitRatio).div(VaultMSData.COM_RATE_PRECISION);         
-            return vault.usdToTokenMax(_collateralToken, resvUSD);
+            // require(maxProfitRatio > 0 && _takeProfitRatio <= maxProfitRatio, "invalid max profit");
+            // uint256 resvUSD = _colUSD.mul(_takeProfitRatio > 0 ? _takeProfitRatio : maxProfitRatio).div(VaultMSData.COM_RATE_PRECISION);         
+            return vault.usdToTokenMax(_collateralToken, _sizeUSD);
         }
         else{
             revert("invalid baseMode");
@@ -420,7 +465,7 @@ contract VaultUtils is IVaultUtils, Ownable {
         }
     }
 
-    function getInitialPosition(address _account, address _collateralToken, address _indexToken, uint256 _sizeDelta, bool _isLong, uint256 _price) public override view returns (VaultMSData.Position memory){
+    function getInitialPosition(address _account, address _collateralToken, address _indexToken, uint256 , bool _isLong, uint256 _price) public override view returns (VaultMSData.Position memory){
         VaultMSData.Position memory position;
         position.account = _account;
         position.averagePrice = _price;
@@ -482,15 +527,15 @@ contract VaultUtils is IVaultUtils, Ownable {
         }
 
         uint256 remainingCollateral = position.collateral;
-        if (_premiumFee >= 0)
-            remainingCollateral = remainingCollateral.add(uint256(_premiumFee));
+        if (_premiumFee < 0)
+            remainingCollateral = remainingCollateral.add(uint256(-_premiumFee));
         else{
-            if (remainingCollateral < uint256(-_premiumFee)) {
+            if (remainingCollateral < uint256(_premiumFee)) {
                 if (_raise) { revert("Vault: index fees exceed collateral"); }
                 // cap the fees to the remainingCollateral
                 return (1, remainingCollateral,_premiumFee);
             }
-            remainingCollateral = remainingCollateral.sub(uint256(-_premiumFee));
+            remainingCollateral = remainingCollateral.sub(uint256(_premiumFee));
         }
 
         if (remainingCollateral < marginFees) {
@@ -576,18 +621,18 @@ contract VaultUtils is IVaultUtils, Ownable {
         return _sizeDelta.sub(afterFeeUsd);
     }
 
-    function getPositionImpactRatio(address _token, uint256 _size) public view returns (uint256) {
+    function getPositionImpactRatio(address _token, uint256 _size, bool /*_isLong*/) public view returns (uint256) {
         uint256 bFBP = 0;
         if (spreadBasis[_token] == 0 || maxSpreadBasis[_token] == 0) return 0;
         if (_size <= minSpreadCalUSD[_token]) return 0;
-        uint256 _impact = IVaultPriceFeedV3(vault.priceFeed()).priceVariancePer1Million(_token);
+        uint256 _impact = IVaultPriceFeedV3Fast(vault.priceFeed()).priceVariancePer1Million(_token);
         if (_impact == 0) return 0;
         bFBP = _impact.mul(_size.sub(minSpreadCalUSD[_token])).mul(spreadBasis[_token]).div(VaultMSData.COM_RATE_PRECISION).div(1000000*VaultMSData.PRICE_PRECISION);
         return bFBP > maxSpreadBasis[_token] ? maxSpreadBasis[_token] : bFBP;
     }
 
     function getImpactedPrice(address _token, uint256 _sizeDelta, uint256 _price, bool _isLong) public override view returns (uint256) {
-        uint256 pIR = getPositionImpactRatio(_token, _sizeDelta);
+        uint256 pIR = getPositionImpactRatio(_token, _sizeDelta, _isLong);
         if (pIR == 0) return _price;
         return _isLong ? _price.mul(VaultMSData.COM_RATE_PRECISION.add(pIR)).div(VaultMSData.COM_RATE_PRECISION)
             :  _price.mul(VaultMSData.COM_RATE_PRECISION.sub(pIR)).div(VaultMSData.COM_RATE_PRECISION);
